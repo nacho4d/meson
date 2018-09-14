@@ -861,10 +861,11 @@ This will become a hard error in a future Meson release.''')
             return True
         return False
 
+    @lru_cache()
     def get_dependencies(self, exclude=None, internal=True, link_whole=False):
         transitive_deps = []
         if exclude is None:
-            exclude = []
+            exclude = ()
         for t in self.link_targets:
             if t in transitive_deps or t in exclude:
                 continue
@@ -877,7 +878,7 @@ This will become a hard error in a future Meson release.''')
                 continue
             transitive_deps.append(t)
             if isinstance(t, StaticLibrary):
-                transitive_deps += t.get_dependencies(transitive_deps + exclude,
+                transitive_deps += t.get_dependencies(tuple(transitive_deps) + exclude,
                                                       internal, link_whole)
         for t in self.link_whole_targets:
             if t in transitive_deps or t in exclude:
@@ -891,9 +892,9 @@ This will become a hard error in a future Meson release.''')
                 transitive_deps.append(t)
             # However, the transitive dependencies are still needed
             if isinstance(t, StaticLibrary):
-                transitive_deps += t.get_dependencies(transitive_deps + exclude,
+                transitive_deps += t.get_dependencies(tuple(transitive_deps) + exclude,
                                                       internal, link_whole)
-        return transitive_deps
+        return tuple(transitive_deps)
 
     def get_source_subdir(self):
         return self.subdir
