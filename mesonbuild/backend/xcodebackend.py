@@ -733,7 +733,6 @@ class XCodeBackend(backends.Backend):
                 else:
                     product_name = target.get_basename()
                 ldargs += target.link_args
-                ldstr = ' '.join(ldargs)
                 valid = self.buildconfmap[target_name][buildtype]
                 langargs = {}
                 for lang in self.environment.coredata.compilers:
@@ -790,7 +789,7 @@ class XCodeBackend(backends.Backend):
                     self.write_line('LIBRARY_STYLE = DYNAMIC;')
                 for langname, args in langargs.items():
                     self.write_build_setting_line('OTHER_%sFLAGS' % langname, args)
-                self.write_line('OTHER_LDFLAGS = "%s";' % ldstr)
+                self.write_build_setting_line('OTHER_LDFLAGS', ldargs)
                 self.write_line('OTHER_REZFLAGS = "";')
                 self.write_line('PRODUCT_NAME = %s;' % product_name)
                 self.write_line('SECTORDER_FLAGS = "";')
