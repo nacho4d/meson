@@ -69,8 +69,11 @@ class XCodeBackend(backends.Backend):
         directories = os.path.normpath(self.get_target_dir(target)).split(os.sep)
         return os.sep.join(['..'] * len(directories))
 
-    def write_line(self, text):
-        self.ofile.write(self.indent * self.indent_level + text)
+    def write_line(self, text, indent_enabled=True):
+        il = self.indent_level
+        if not indent_enabled:
+            il = 0
+        self.ofile.write(self.indent * il + text)
         if not text.endswith('\n'):
             self.ofile.write('\n')
 
@@ -128,18 +131,23 @@ class XCodeBackend(backends.Backend):
                 if isinstance(s, mesonlib.File):
                     s = os.path.join(s.subdir, s.fname)
                     self.filemap[s] = self.gen_id()
-            for o in t.objects:
-                if isinstance(o, str):
-                    o = os.path.join(t.subdir, o)
-                    self.filemap[o] = self.gen_id()
+            # CustomTarget instances do not have objects attributes
+            if not isinstance(t, build.CustomTarget):
+                for o in t.objects:
+                    if isinstance(o, str):
+                        o = os.path.join(t.subdir, o)
+                        self.filemap[o] = self.gen_id()
             self.target_filemap[name] = self.gen_id()
 
     def generate_buildmap(self):
         self.buildmap = {}
         for t in self.build.targets.values():
             for s in t.sources:
-                s = os.path.join(s.subdir, s.fname)
-                self.buildmap[s] = self.gen_id()
+                if isinstance(s, mesonlib.File):
+                    s = os.path.join(s.subdir, s.fname)
+                    self.buildmap[s] = self.gen_id()
+            if isinstance(t, build.CustomTarget):
+                continue
             for o in t.objects:
                 o = os.path.join(t.subdir, o)
                 if isinstance(o, str):
@@ -187,6 +195,9 @@ class XCodeBackend(backends.Backend):
         self.native_frameworks = {}
         self.native_frameworks_fileref = {}
         for t in self.build.targets.values():
+            # CustomTarget instances don't have external_deps
+            if isinstance(t, build.CustomTarget):
+                continue
             for dep in t.get_external_deps():
                 if isinstance(dep, dependencies.AppleFrameworks):
                     for f in dep.frameworks:
@@ -196,6 +207,9 @@ class XCodeBackend(backends.Backend):
     def generate_target_dependency_map(self):
         self.target_dependency_map = {}
         for tname, t in self.build.targets.items():
+            # CustomTarget instances don't have link_targets
+            if isinstance(t, build.CustomTarget):
+                continue
             for target in t.link_targets:
                 self.target_dependency_map[(tname, target.get_basename())] = self.gen_id()
 
@@ -219,6 +233,15 @@ class XCodeBackend(backends.Backend):
         aggregated_targets = []
         aggregated_targets.append((self.all_id, 'ALL_BUILD', self.all_buildconf_id, [], target_dependencies))
         aggregated_targets.append((self.test_id, 'RUN_TESTS', self.test_buildconf_id, [self.test_command_id], []))
+        # Write CustomTargets as PBXAggregateTarget
+        custom_targets = [t for t in self.build.targets if isinstance(t, build.CustomTarget)]
+        for tname, idval in self.native_targets.items():
+            if not isinstance(self.build.targets[tname], build.CustomTarget):
+                continue
+            t = self.build.targets[tname]
+            build_conf_id = self.buildconflistmap[tname]
+            aggregated_targets.append((idval, tname, build_conf_id, [], []))
+        aggregated_targets = aggregated_targets + custom_targets
         # Sort objects by ID before writing
         sorted_aggregated_targets = sorted(aggregated_targets, key=operator.itemgetter(0))
         self.ofile.write('\n/* Begin PBXAggregateTarget section */\n')
@@ -243,8 +266,8 @@ class XCodeBackend(backends.Backend):
                 self.write_line('%s /* PBXTargetDependency */,' % td)
             self.indent_level -= 1
             self.write_line(');')
-            self.write_line('name = %s;' % name)
-            self.write_line('productName = %s;' % name)
+            self.write_line('name = "%s";' % name)
+            self.write_line('productName = "%s";' % name)
             self.indent_level -= 1
             self.write_line('};')
         self.ofile.write('/* End PBXAggregateTarget section */\n')
@@ -256,6 +279,9 @@ class XCodeBackend(backends.Backend):
 
         for t in self.build.targets.values():
 
+            # CustomTarget instances do not have external_deps method, no files in buildmap, no objects attributes
+            if isinstance(t, build.CustomTarget):
+                continue
             for dep in t.get_external_deps():
                 if isinstance(dep, dependencies.AppleFrameworks):
                     for f in dep.frameworks:
@@ -316,6 +342,9 @@ class XCodeBackend(backends.Backend):
     def generate_pbx_file_reference(self):
         self.ofile.write('\n/* Begin PBXFileReference section */\n')
         for t in self.build.targets.values():
+            # CustomTarget instances do not have get_external_deps method
+            if isinstance(t, build.CustomTarget):
+                continue
             for dep in t.get_external_deps():
                 if isinstance(dep, dependencies.AppleFrameworks):
                     for f in dep.frameworks:
@@ -353,10 +382,12 @@ class XCodeBackend(backends.Backend):
             self.write_line('buildActionMask = %s;\n' % (2147483647))
             self.write_line('files = (\n')
             self.indent_level += 1
-            for dep in t.get_external_deps():
-                if isinstance(dep, dependencies.AppleFrameworks):
-                    for f in dep.frameworks:
-                        self.write_line('%s /* %s.framework in Frameworks */,\n' % (self.native_frameworks[f], f))
+            # CustomTarget instances do not have get_external_deps method
+            if not isinstance(t, build.CustomTarget):
+                for dep in t.get_external_deps():
+                    if isinstance(dep, dependencies.AppleFrameworks):
+                        for f in dep.frameworks:
+                            self.write_line('%s /* %s.framework in Frameworks */,\n' % (self.native_frameworks[f], f))
             self.indent_level -= 1
             self.write_line(');\n')
             self.write_line('runOnlyForDeploymentPostprocessing = 0;\n')
@@ -423,6 +454,9 @@ class XCodeBackend(backends.Backend):
         self.indent_level += 1
 
         for t in self.build.targets.values():
+            # CustomTarget instances do not have get_external_deps method
+            if isinstance(t, build.CustomTarget):
+                continue
             for dep in t.get_external_deps():
                 if isinstance(dep, dependencies.AppleFrameworks):
                     for f in dep.frameworks:
@@ -453,15 +487,17 @@ class XCodeBackend(backends.Backend):
             self.indent_level += 1
             self.write_line('isa = PBXGroup;')
             self.write_line('children = (')
-            self.indent_level += 1
-            for s in self.build.targets[t].sources:
-                s = os.path.join(s.subdir, s.fname)
-                if isinstance(s, str):
-                    self.write_line('%s /* %s */,' % (self.filemap[s], s))
-            for o in self.build.targets[t].objects:
-                o = os.path.join(self.build.targets[t].subdir, o)
-                self.write_line('%s /* %s */,' % (self.filemap[o], o))
-            self.indent_level -= 1
+            # CustomTarget instances do not have files in buildmap, no objects attributes
+            if not isinstance(self.build.targets[t], build.CustomTarget):
+                self.indent_level += 1
+                for s in self.build.targets[t].sources:
+                    s = os.path.join(s.subdir, s.fname)
+                    if isinstance(s, str):
+                        self.write_line('%s /* %s */,' % (self.filemap[s], s))
+                for o in self.build.targets[t].objects:
+                    o = os.path.join(self.build.targets[t].subdir, o)
+                    self.write_line('%s /* %s */,' % (self.filemap[o], o))
+                self.indent_level -= 1
             self.write_line(');')
             self.write_line('name = "Source files";')
             self.write_line('sourceTree = "<group>";')
@@ -475,6 +511,8 @@ class XCodeBackend(backends.Backend):
         self.write_line('children = (')
         self.indent_level += 1
         for t in self.build.targets:
+            if isinstance(self.build.targets[t], build.CustomTarget):
+                continue
             self.write_line('%s /* %s */,' % (self.target_filemap[t], t))
         self.indent_level -= 1
         self.write_line(');')
@@ -487,6 +525,9 @@ class XCodeBackend(backends.Backend):
     def generate_pbx_native_target(self):
         self.ofile.write('\n/* Begin PBXNativeTarget section */\n')
         for tname, idval in self.native_targets.items():
+            if isinstance(self.build.targets[tname], build.CustomTarget):
+                # CustomTargets are written in the PBXAggregateTarget section
+                continue
             t = self.build.targets[tname]
             self.write_line('%s /* %s */ = {' % (idval, tname))
             self.indent_level += 1
@@ -534,6 +575,17 @@ class XCodeBackend(backends.Backend):
         self.write_line('attributes = {')
         self.indent_level += 1
         self.write_line('BuildIndependentTargetsInParallel = YES;')
+        self.write_line('TargetAttributes = {')
+        self.indent_level += 1
+        for name, idval in self.buildstylemap.items():
+            self.write_line('%s = {' % idval)
+            self.indent_level += 1
+            self.write_line('CreatedOnToolsVersion = 9.4.1;')
+            self.write_line('ProvisioningStyle = Automatic;')
+            self.indent_level -= 1
+            self.write_line('};')
+        self.indent_level -= 1
+        self.write_line('};')
         self.indent_level -= 1
         self.write_line('};')
         conftempl = 'buildConfigurationList = %s /* Build configuration list for PBXProject "%s" */;'
@@ -596,6 +648,9 @@ class XCodeBackend(backends.Backend):
             self.write_line('files = (')
             self.indent_level += 1
             for s in self.build.targets[name].sources:
+                # CustomTarget instances do not add sources
+                if isinstance(self.build.targets[name], build.CustomTarget):
+                    continue
                 s = os.path.join(s.subdir, s.fname)
                 if not self.environment.is_header(s):
                     self.write_line('%s /* %s */,' % (self.buildmap[s], os.path.join(self.environment.get_source_dir(), s)))
@@ -707,17 +762,19 @@ class XCodeBackend(backends.Backend):
                 dep_libs = []
                 links_dylib = False
                 headerdirs = []
-                for d in target.include_dirs:
-                    for sd in d.incdirs:
-                        cd = os.path.join(d.curdir, sd)
-                        headerdirs.append(os.path.join(self.environment.get_source_dir(), cd))
-                        headerdirs.append(os.path.join(self.environment.get_build_dir(), cd))
-                for l in target.link_targets:
-                    abs_path = os.path.join(self.environment.get_build_dir(),
-                                            l.subdir, buildtype, l.get_filename())
-                    dep_libs.append("'%s'" % abs_path)
-                    if isinstance(l, build.SharedLibrary):
-                        links_dylib = True
+                # CustomTarget instances do not have objects attributes
+                if not isinstance(target, build.CustomTarget):
+                    for d in target.include_dirs:
+                        for sd in d.incdirs:
+                            cd = os.path.join(d.curdir, sd)
+                            headerdirs.append(os.path.join(self.environment.get_source_dir(), cd))
+                            headerdirs.append(os.path.join(self.environment.get_build_dir(), cd))
+                    for l in target.link_targets:
+                        abs_path = os.path.join(self.environment.get_build_dir(),
+                                                l.subdir, buildtype, l.get_filename())
+                        dep_libs.append("'%s'" % abs_path)
+                        if isinstance(l, build.SharedLibrary):
+                            links_dylib = True
                 if links_dylib:
                     dep_libs = ['-Wl,-search_paths_first', '-Wl,-headerpad_max_install_names'] + dep_libs
                 dylib_version = None
@@ -732,7 +789,8 @@ class XCodeBackend(backends.Backend):
                     product_name = target.get_basename() + '.' + dylib_version
                 else:
                     product_name = target.get_basename()
-                ldargs += target.link_args
+                if not isinstance(target, build.CustomTarget):
+                    ldargs += target.link_args
                 valid = self.buildconfmap[target_name][buildtype]
                 langargs = {}
                 for lang in self.environment.coredata.compilers:
@@ -743,10 +801,15 @@ class XCodeBackend(backends.Backend):
                     # Add compile args added using add_global_arguments()
                     # These override per-project arguments
                     gargs = self.build.global_args.get(lang, [])
-                    targs = target.get_extra_args(lang)
+                    targs = []
+                    if not isinstance(target, build.CustomTarget):
+                        targs = target.get_extra_args(lang)
                     args = pargs + gargs + targs
                     if len(args) > 0:
                         langargs[langnamemap[lang]] = args
+                target_suffix = ''
+                if not isinstance(target, build.CustomTarget):
+                    target_suffix = target.prefix
                 symroot = os.path.join(self.environment.get_build_dir(), target.subdir)
                 self.write_line('%s /* %s */ = {' % (valid, buildtype))
                 self.indent_level += 1
@@ -756,16 +819,16 @@ class XCodeBackend(backends.Backend):
                 self.write_line('COMBINE_HIDPI_IMAGES = YES;')
                 if dylib_version is not None:
                     self.write_line('DYLIB_CURRENT_VERSION = "%s";' % dylib_version)
-                self.write_line('EXECUTABLE_PREFIX = "%s";' % target.prefix)
-                if target.suffix == '':
+                self.write_line('EXECUTABLE_PREFIX = "%s";' % target_suffix)
+                if target_suffix == '':
                     suffix = ''
                 else:
-                    suffix = '.' + target.suffix
+                    suffix = '.' + target_suffix
                 self.write_line('EXECUTABLE_SUFFIX = "%s";' % suffix)
                 self.write_line('GCC_GENERATE_DEBUGGING_SYMBOLS = YES;')
                 self.write_line('GCC_INLINES_ARE_PRIVATE_EXTERN = NO;')
                 self.write_line('GCC_OPTIMIZATION_LEVEL = 0;')
-                if target.has_pch:
+                if not isinstance(target, build.CustomTarget) and target.has_pch:
                     # Xcode uses GCC_PREFIX_HEADER which only allows one file per target/executable. Precompiling various header files and
                     # applying a particular pch to each source file will require custom scripts (as a build phase) and build flags per each
                     # file. Since Xcode itself already discourages precompiled headers in favor of modules we don't try much harder here.
@@ -805,66 +868,57 @@ class XCodeBackend(backends.Backend):
         self.ofile.write('/* End XCBuildConfiguration section */\n')
 
     def generate_xc_configurationList(self):
-        # FIXME: sort items
-        self.ofile.write('\n/* Begin XCConfigurationList section */\n')
-        self.write_line('%s /* Build configuration list for PBXProject "%s" */ = {' % (self.project_conflist, self.build.project_name))
-        self.indent_level += 1
-        self.write_line('isa = XCConfigurationList;')
-        self.write_line('buildConfigurations = (')
-        self.indent_level += 1
-        for buildtype in self.buildtypes:
-            self.write_line('%s /* %s */,' % (self.project_configurations[buildtype], buildtype))
-        self.indent_level -= 1
-        self.write_line(');')
-        self.write_line('defaultConfigurationIsVisible = 0;')
-        self.write_line('defaultConfigurationName = debug;')
-        self.indent_level -= 1
-        self.write_line('};')
-
-        # Now the all target
-        self.write_line('%s /* Build configuration list for PBXAggregateTarget "ALL_BUILD" */ = {' % self.all_buildconf_id)
-        self.indent_level += 1
-        self.write_line('isa = XCConfigurationList;')
-        self.write_line('buildConfigurations = (')
-        self.indent_level += 1
-        for buildtype in self.buildtypes:
-            self.write_line('%s /* %s */,' % (self.buildall_configurations[buildtype], buildtype))
-        self.indent_level -= 1
-        self.write_line(');')
-        self.write_line('defaultConfigurationIsVisible = 0;')
-        self.write_line('defaultConfigurationName = debug;')
-        self.indent_level -= 1
-        self.write_line('};')
-
-        # Test target
-        self.write_line('%s /* Build configuration list for PBXAggregateTarget "ALL_BUILD" */ = {' % self.test_buildconf_id)
-        self.indent_level += 1
-        self.write_line('isa = XCConfigurationList;')
-        self.write_line('buildConfigurations = (')
-        self.indent_level += 1
-        for buildtype in self.buildtypes:
-            self.write_line('%s /* %s */,' % (self.test_configurations[buildtype], buildtype))
-        self.indent_level -= 1
-        self.write_line(');')
-        self.write_line('defaultConfigurationIsVisible = 0;')
-        self.write_line('defaultConfigurationName = debug;')
-        self.indent_level -= 1
-        self.write_line('};')
+        configurationItems = []
+        configurationItems.append(XCConfigurationListItem(
+            'PBXProject',
+            self.project_conflist,
+            self.build.project_name,
+            list(map(lambda bt: (self.project_configurations[bt], bt), self.buildtypes)),
+            'debug'
+        ))
+        configurationItems.append(XCConfigurationListItem(
+            'PBXAggregateTarget',
+            self.all_buildconf_id,
+            'ALL_BUILD',
+            list(map(lambda bt: (self.buildall_configurations[bt], bt), self.buildtypes)),
+            'debug'
+        ))
+        configurationItems.append(XCConfigurationListItem(
+            'PBXAggregateTarget',
+            self.test_buildconf_id,
+            'RUN_TESTS',
+            list(map(lambda bt: (self.test_configurations[bt], bt), self.buildtypes)),
+            'debug'
+        ))
 
         for target_name in self.build.targets:
+            target_class_name = 'PBXNativeTarget'
+            if isinstance(self.build.targets[target_name], build.CustomTarget):
+                target_class_name = 'PBXAggregateTarget'
             listid = self.buildconflistmap[target_name]
-            self.write_line('%s /* Build configuration list for PBXNativeTarget "%s" */ = {' % (listid, target_name))
+            configurationItems.append(XCConfigurationListItem(
+                target_class_name,
+                listid,
+                target_name,
+                [(self.buildconfmap[target_name]['debug'], 'debug')],
+                'debug'
+            ))
+
+        configurationItems.sort()
+
+        self.ofile.write('\n/* Begin XCConfigurationList section */\n')
+        for item in configurationItems:
+            self.write_line('%s /* Build configuration list for %s "%s" */ = {' % (item.id, item.target_class_name, item.target_name))
             self.indent_level += 1
             self.write_line('isa = XCConfigurationList;')
             self.write_line('buildConfigurations = (')
             self.indent_level += 1
-            typestr = 'debug'
-            idval = self.buildconfmap[target_name][typestr]
-            self.write_line('%s /* %s */,' % (idval, typestr))
+            for build_config_pair in item.build_config_pairs:
+                self.write_line('%s /* %s */,' % (build_config_pair[0], build_config_pair[1]))
             self.indent_level -= 1
             self.write_line(');')
             self.write_line('defaultConfigurationIsVisible = 0;')
-            self.write_line('defaultConfigurationName = %s;' % typestr)
+            self.write_line('defaultConfigurationName = %s;' % item.default_config_name)
             self.indent_level -= 1
             self.write_line('};')
         self.ofile.write('/* End XCConfigurationList section */\n')
@@ -909,3 +963,14 @@ class XCodeBackend(backends.Backend):
         self.write_line('rootObject = ' + self.project_uid + ' /* Project object */;')
         self.indent_level -= 1
         self.write_line('}\n')
+
+class XCConfigurationListItem:
+    def __init__(self, target_class_name, id, target_name, build_config_pairs, default_config_name):
+        self.target_class_name = target_class_name
+        self.id = id
+        self.target_name = target_name
+        self.build_config_pairs = build_config_pairs
+        self.default_config_name = default_config_name
+
+    def __lt__(self, other):
+        return self.id.__lt__(other.id)
