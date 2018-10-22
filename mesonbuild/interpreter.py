@@ -3800,6 +3800,7 @@ different subdirectory.
     def run(self):
         super().run()
         mlog.log('Build targets in project:', mlog.bold(str(len(self.build.targets))))
+        mlog.log('Build backend:', mlog.bold(self.backend.name))
         FeatureNew.report(self.subproject)
         FeatureDeprecated.report(self.subproject)
         if not self.is_subproject():
